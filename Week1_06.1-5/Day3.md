@@ -18,3 +18,18 @@ Note: Success.
 
 Questions:
 1. I only found one address at `08:00.1`, and it seems like since there are two nodes, they should have two addresses, unless this address represents the connection between the two nodes and not the nodes themselves.
+
+14. Seems like the driver that installs with update_eeprom does not match what it is supposed to match. The newest expressware is 5.25.2, but the driver listed in dis_diag is 5.26. Then the eeprom version is also not right. It's 14, but it should be 15. 
+15. Roy showed me a few steps to take on remote node 5, so I am repeating the steps on remote node 6. 
+16. First step, running dis_services status. This lists all services and whether they are running. 
+17. There is a service called nodemgr that will create a dishosts file for me. I turn this service on with the command "nodemgr-setup -i --start"
+18. The service is confirmed running in dis_services status. 
+19. Before running the nodemgr, dishosts lists localhost as node 4, and there are three physical adapters connected. a0, a1, a2... Link width is 4, link speed is 3. 
+20. Running the nodemgr service feature that creates a dishost file: dis_services restart (This stops each dis_service and brings them back up in the correct order)
+21. The nodemgr is not creating or modifying the dishosts file like it should be, so I'm going to adjust my plan. 
+
+The new plan:
+22. Update the Linux versions on both nodes. 
+23. Find the Dolphin installer that will work for the new matching Linux distro.
+
+24. Test and configure. 
