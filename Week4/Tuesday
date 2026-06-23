@@ -1,0 +1,265 @@
+# Week 4 Tuesday – Follow-up Response to Fujitsu Inquiry
+
+**From:** Sharath Krishna Karanam  
+**Date:** 2026-06-23  
+**Ticket:** DCS-1540
+
+---
+
+## Summary Response
+
+Thank you for the follow-up questions. Based on technical guidance from our infrastructure team, here are clarifications on the key concerns:
+
+---
+
+## 1. PCIe Host Identification Without IP/Network
+
+**Question:** Is it possible to identify connected hosts using only direct PCIe cables?
+
+**Response:** 
+Our system matches hosts via IP-addresses. For network-less deployments:
+
+- **Hosts with NICs:** Assign static IP addresses
+- **Hosts without NICs:** Configure dummy IP-interfaces (required for SuperSockets compatibility, as it replaces network calls via existing IP-interfaces)
+
+**Fallback Options** (if IP-interfaces unavailable):
+- Custom `dishosts.conf` files per node using `DIS_LOCAL` hostname identifiers
+- Alternative: Remove `dishosts.conf` + Node Manager, call `dis_config` in `/etc/rc.local`
+  - **Trade-off:** Breaks SuperSockets, but NodeId configures post-boot
+
+---
+
+## 2. Installation Prerequisites
+
+**Question:** Is pre-cable installation supported (ExpressWare installed on both nodes before PCIe connection)?
+
+**Response:** Yes, this scenario is supported. Post-connection steps are detailed in Section 4.
+
+---
+
+## 3. Post-Cable Connection Steps
+
+After physically connecting PCIe cables:
+1. Verify IP-interfaces are operational (static IPs or dummy interfaces)
+2. Run connection validation checks (see verification tests below)
+3. Execute cluster formation with `--install-frontend` (see Section 5)
+
+---
+
+## 4. Kernel-ExpressWare Version Mismatch Errors
+
+**Question:** What error does dis_diag report on kernel mismatch?
+
+**Response:**
+`dis_diag` connects to the IRM (`dis_Irm`) kernel module, which depends on lower-level interconnect drivers (`dis_mx.conf`). If version mismatch exists:
+- Neither module will load against the running kernel
+- **Error message:** `dis_diag` reports that drivers are not loaded
+
+**Action:** Rebuild modules against the current kernel version.
+
+---
+
+## 5. Cluster Formation & SSH Dependency (--install-frontend)
+
+**Question:** Why is SSH still required despite "passwordless" claims? How does the proprietary port work?
+
+**Response:**
+SSH is required for `--install-frontend` (not optional). The cluster formation uses:
+
+- **Network Manager → Node Manager:** TCP port **3443** (proprietary cluster protocol)
+- **Admin/GUI tool → Network Manager:** TCP port **3444**
+
+While the installation process initiates via SSH, the actual cluster communication uses these proprietary ports after setup.
+
+---
+
+## Verification Tests
+
+Work through these in order. Check off each step as you go.
+
+---
+
+### Claim 1 – Static/dummy IP identifies hosts over PCIe
+
+**Step 1:** Create and bring up a dummy interface
+```bash
+ip link add dummy0 type dummy
+ip addr add 10.0.0.1/24 dev dummy0
+ip link set dummy0 up
+```
+**Step 2:** Verify dis_diag recognizes the node
+```bash
+dis_diag
+```
+- [ ] Expected: node is recognized, no "drivers not loaded" error
+
+---
+
+### Claim 1b – SuperSockets breaks without an IP interface
+
+**Step 3:** Take the dummy interface back down
+```bash
+ip link set dummy0 down
+```
+**Step 4:** Attempt a SuperSockets transfer  
+- [ ] Expected: failure/error — confirms SuperSockets IP dependency
+
+---
+
+### Claim 1c – dishosts.conf hostname workaround (no SuperSockets) ⚠️ Needs Testing
+
+**Step 5:** Check current dishosts.conf state
+```bash
+cat /etc/dishosts.conf
+```
+**Step 6:** Edit to use `DIS_LOCAL`/hostname instead of IP, then re-run dis_diag
+```bash
+dis_diag
+```
+- [ ] Expected: node still resolves by hostname
+
+**Step 7:** Attempt SuperSockets with hostname-only config  
+- [ ] Expected: failure — confirms the tradeoff is real
+
+---
+
+### Claim 2 – ExpressWare installs cleanly without PCIe cables attached
+
+**Step 8:** Confirm install completes with no cable
+```bash
+dis_diag
+```
+- [ ] Expected: clean install, no remote nodes visible (that's fine — cables aren't in yet)
+
+---
+
+### Claim 2b – dis_mkconf updates dishosts.conf, scp propagates it
+
+**Step 9:** Run dis_mkconf and verify the file was updated
+```bash
+dis_mkconf
+cat /etc/dishosts.conf
+```
+- [ ] Expected: new node entries appear
+
+**Step 10:** Copy to the other node and confirm it arrived
+```bash
+scp /etc/dishosts.conf user@othernode:/etc/dishosts.conf
+ssh othernode "cat /etc/dishosts.conf"
+```
+- [ ] Expected: updated file on the remote node
+
+---
+
+### Claim 2c – Service restart may be required after scp ⚠️ Needs Testing
+
+**Step 11:** Test without restart first
+```bash
+ssh othernode "dis_diag"
+```
+- [ ] Does it see the updated nodes without a restart?
+
+**Step 12:** If not, restart nodemgr and retest
+```bash
+ssh othernode "systemctl restart nodemgr && dis_diag"
+```
+- [ ] Note whether restart was required — update the answer accordingly
+
+---
+
+### Claim 3 – dis_diag reports "drivers not loaded" on kernel mismatch
+
+**Step 13:** Check if running kernel matches what ExpressWare was built against
+```bash
+uname -r
+modinfo dis_mx
+```
+- [ ] If versions differ, proceed to step 14
+
+**Step 14:** Attempt to load the module and run dis_diag
+```bash
+modprobe dis_mx
+dis_diag
+```
+- [ ] Expected: modprobe fails, dis_diag reports "drivers not loaded"
+
+---
+
+### Claim 4 – Ports 3443 and 3444 in use after cluster formation
+
+**Step 15:** After cluster is formed, verify both ports are listening
+```bash
+ss -tlnp | grep -E '3443|3444'
+```
+- [ ] Expected: Network Manager on 3443, GUI/admin listener on 3444
+
+---
+
+### Claim 5 – SSH required during install, 34xx ports only after
+
+**Step 16:** During `--install-frontend`, confirm SSH traffic is present
+```bash
+tcpdump -i any port 22 &
+# Run --install-frontend in another terminal
+```
+- [ ] Expected: SSH traffic visible during install
+
+**Step 17:** After install, block SSH and confirm nodes still communicate
+```bash
+iptables -A INPUT -p tcp --dport 22 -j DROP
+dis_diag
+iptables -D INPUT -p tcp --dport 22 -j DROP   # Restore immediately after
+```
+- [ ] Expected: dis_diag succeeds over 34xx ports, SSH no longer needed
+
+---
+
+## Original Inquiry
+
+
+Sharath Krishna Karanam
+Today 07:08
+Thanks Ben for the response. We have a few additional queries:
+
+
+Is it possible to identify the connected host using only a direct PCIe cable connection (without IP/network)?
+
+Is the following scenario supported (hosts up, no cables connected)?
+
+Install ExpressWare on both nodes.
+
+After connecting the PCIe cables what steps or configurations are required to establish connectivity?
+
+What error is reported in dis_diag when there is a mismatch between the upgraded kernel and the currently installed ExpressWare version?
+
+Could you explain the technical mechanism behind cluster formation using --install-frontend? Specifically, as discussed in the meeting, it was mentioned that some proprietary port is used—could you clarify how this works?
+
+ 
+
+
+Sharath Krishna Karanam
+Today 11:44
+We were informed earlier (including in the biweekly sync) that password less SSH is not required for the installation. However, during execution, it still prompts for SSH (frontend), indicating SSH dependency. (--install frontend)
+
+image-20260623-114256.png
+We also heard that a proprietary port is used. Could you please clarify why SSH is still needed and how this port is involved?
+
+Information provided by Simen:
+Hi Ben,
+
+More fun on your ticket (https://dolphinics.atlassian.net/browse/DCS-1540)
+
+Is it possible to identify the connected host using only a direct PCIe cable connection (without IP/network)?
+
+Our mechanism here is to match interface IP-addresses. For network-less hosts that have NICs we've suggested that these are assigned static IP addresses  and for hosts that do not have NICs we've suggested that these are set up with 'dummy' IP-interfaces so that they can still be configued. Havin a working IP-interface is also required for SuperSockets, as it relies on an existing IP-interface to replace the network calls issued.
+
+If no IP-interfaces at all are possible then there are options which may or may not have acceptable downsides;
+Custom dishosts.conf files for each node that identifies the node with the DIS_LOCAL etc hostname, or to drop the dishosts.conf file and the Node Manager and to instead call dis_config in /etc/rc.local or similar. Both of these break SuperSockets, but will have the node with NodeId configured after booting.
+
+What error is reported in dis_diag when there is a mismatch between the upgraded kernel and the currently installed ExpressWare version?
+
+Dis_diag relies on connecting to the IRM (dis_Irm) kernel module. This module depends on the lower-level interconnect driver modules (dis_mx.conf) - neither of these modules will load if they are not built to fit the running kernel, and dis_diag will complain that the drivers are not loaded.
+
+Could you explain the technical mechanism behind cluster formation using --install-frontend? Specifically, as discussed in the meeting, it was mentioned that some proprietary port is used—could you clarify how this works?
+
+Suggest you confirm with netstat, but - Network Manager connects to Node Manager on tcp port 3443. I think the Network Manager takes connections from admin/gui tool on tcp port 3444. (edited)
